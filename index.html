@@ -1,0 +1,671 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>マインスイーパー (10x10)</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body {
+            touch-action: manipulation;
+            user-select: none;
+            -webkit-user-select: none;
+        }
+        canvas {
+            touch-action: none;
+        }
+    </style>
+</head>
+<body class="bg-slate-900 text-white min-h-screen flex flex-col items-center justify-center p-4">
+
+    <!-- メインコンテナ -->
+    <div class="flex flex-col items-center max-w-md w-full bg-slate-800 p-6 rounded-2xl shadow-2xl border border-slate-700">
+        
+        <!-- ヘッダー / タイトル -->
+        <h1 class="text-2xl font-bold mb-3 text-emerald-400 tracking-wider">⚡MINESWEEPER⚡</h1>
+
+        <!-- 難易度選択ボタン -->
+        <div class="w-full mb-4">
+            <div class="grid grid-cols-4 gap-1 bg-slate-900/80 p-1 rounded-xl border border-slate-700" id="difficulty-selector">
+                <button data-diff="easy" class="diff-btn py-1.5 rounded-lg text-xs font-bold transition text-slate-400 hover:text-white">Easy</button>
+                <button data-diff="normal" class="diff-btn py-1.5 rounded-lg text-xs font-bold transition bg-indigo-600 text-white shadow">Normal</button>
+                <button data-diff="hard" class="diff-btn py-1.5 rounded-lg text-xs font-bold transition text-slate-400 hover:text-white">Hard</button>
+                <button data-diff="veryHard" class="diff-btn py-1.5 rounded-lg text-xs font-bold transition text-slate-400 hover:text-white">V.Hard</button>
+            </div>
+        </div>
+
+        <!-- ステータスパネル -->
+        <div class="grid grid-cols-3 gap-2 w-full mb-4 text-center">
+            <div class="bg-slate-900/80 p-2 rounded-lg border border-slate-700">
+                <div class="text-xs text-slate-400">残り地雷</div>
+                <div id="mine-count" class="text-xl font-bold text-red-400">8</div>
+            </div>
+            <div class="bg-slate-900/80 p-2 rounded-lg border border-slate-700">
+                <div class="text-xs text-slate-400">状態</div>
+                <div id="game-status" class="text-sm font-bold text-amber-400 leading-6">プレイ中</div>
+            </div>
+            <div class="bg-slate-900/80 p-2 rounded-lg border border-slate-700">
+                <div class="text-xs text-slate-400">モード</div>
+                <div id="click-mode" class="text-xs font-bold text-cyan-400 leading-6">開く</div>
+            </div>
+        </div>
+
+        <!-- コントロールボタン群 -->
+        <div class="flex gap-2 w-full mb-4">
+            <!-- フラグモード切替ボタン (モバイル配慮) -->
+            <button id="btn-mode" class="flex-1 py-2 px-3 bg-slate-700 hover:bg-slate-600 rounded-lg font-semibold text-xs flex items-center justify-center gap-1 transition active:scale-95">
+                <span>🚩 旗モード: OFF</span>
+            </button>
+
+            <!-- 地雷探知機ボタン -->
+            <button id="btn-detector" class="flex-1 py-2 px-3 bg-indigo-600 hover:bg-indigo-500 disabled:bg-slate-700 disabled:opacity-50 text-white rounded-lg font-semibold text-xs flex items-center justify-center gap-1 transition active:scale-95 shadow-lg shadow-indigo-900/40">
+                <span>📡 地雷探知機</span>
+            </button>
+        </div>
+
+        <!-- Canvas表示エリア -->
+        <div id="canvas-container" class="relative w-full aspect-square bg-slate-950 rounded-xl overflow-hidden shadow-inner border border-slate-800 flex items-center justify-center">
+            <canvas id="gameCanvas" class="cursor-pointer block"></canvas>
+        </div>
+
+        <!-- メッセージ表示エリア -->
+        <div id="message-box" class="mt-4 text-sm font-medium text-slate-300 h-6 text-center">
+            マスをタップして開きます (長押しで旗)
+        </div>
+
+        <!-- リセットボタン -->
+        <button id="btn-restart" class="mt-4 w-full py-3 bg-emerald-600 hover:bg-emerald-500 font-bold rounded-xl shadow-lg shadow-emerald-900/30 transition active:scale-95">
+            ゲームをやり直す
+        </button>
+    </div>
+
+    <script>
+        // 難易度定義
+        const DIFFICULTIES = {
+            easy: { size: 8, mines: 5, detectorCount: 1 },
+            normal: { size: 10, mines: 8, detectorCount: 2 },
+            hard: { size: 12, mines: 10, detectorCount: 2 },
+            veryHard: { size: 12, mines: 15, detectorCount: 3 }
+        };
+
+        // 現在の難易度設定
+        let currentDifficulty = 'normal';
+        let boardSize = DIFFICULTIES[currentDifficulty].size;
+        let minesCount = DIFFICULTIES[currentDifficulty].mines;
+
+        // ゲーム状態変数
+        let board = [];
+        let gameOver = false;
+        let gameWon = false;
+        let detectorRemaining = DIFFICULTIES[currentDifficulty].detectorCount;
+        let detectorActive = false;
+        let flagMode = false;
+        let firstClick = true;
+
+        // アニメーション用変数
+        let activeEffect = null; // 地雷探知機の光の帯アニメーション管理
+
+        // タッチ操作用変数（長押しで旗）
+        let touchTimer = null;
+        let isLongTouch = false;
+
+        // DOM要素
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const mineCountEl = document.getElementById('mine-count');
+        const gameStatusEl = document.getElementById('game-status');
+        const clickModeEl = document.getElementById('click-mode');
+        const messageBox = document.getElementById('message-box');
+        const btnMode = document.getElementById('btn-mode');
+        const btnDetector = document.getElementById('btn-detector');
+        const btnRestart = document.getElementById('btn-restart');
+        const diffBtns = document.querySelectorAll('.diff-btn');
+
+        // キャンバスサイズ設定
+        let cellSize = 0;
+
+        function resizeCanvas() {
+            const container = document.getElementById('canvas-container');
+            if (!container) return;
+
+            // コンテナサイズを安全に取得 (最小幅フォールバックあり)
+            const containerWidth = container.clientWidth || 300;
+            canvas.width = containerWidth;
+            canvas.height = containerWidth;
+            cellSize = canvas.width / boardSize;
+
+            if (board && board.length > 0) {
+                render();
+            }
+        }
+
+        // 難易度切り替え
+        function setDifficulty(diff) {
+            if (!DIFFICULTIES[diff]) return;
+            currentDifficulty = diff;
+            boardSize = DIFFICULTIES[diff].size;
+            minesCount = DIFFICULTIES[diff].mines;
+
+            // UIのタブ見た目を更新
+            diffBtns.forEach(btn => {
+                if (btn.dataset.diff === diff) {
+                    btn.className = 'diff-btn py-1.5 rounded-lg text-xs font-bold transition bg-indigo-600 text-white shadow';
+                } else {
+                    btn.className = 'diff-btn py-1.5 rounded-lg text-xs font-bold transition text-slate-400 hover:text-white';
+                }
+            });
+
+            initGame();
+        }
+
+        // 初期化
+        function initGame() {
+            board = [];
+            gameOver = false;
+            gameWon = false;
+            detectorRemaining = DIFFICULTIES[currentDifficulty].detectorCount;
+            detectorActive = false;
+            flagMode = false;
+            firstClick = true;
+            if (activeEffect && activeEffect.timer) {
+                clearInterval(activeEffect.timer);
+            }
+            activeEffect = null;
+
+            for (let r = 0; r < boardSize; r++) {
+                board[r] = [];
+                for (let c = 0; c < boardSize; c++) {
+                    board[r][c] = {
+                        isMine: false,
+                        isOpen: false,
+                        isFlagged: false,
+                        neighborMines: 0
+                    };
+                }
+            }
+
+            resizeCanvas();
+            updateUI();
+        }
+
+        // 地雷の配置（初手安全の保証）
+        function placeMines(firstR, firstC) {
+            let placed = 0;
+            while (placed < minesCount) {
+                let r = Math.floor(Math.random() * boardSize);
+                let c = Math.floor(Math.random() * boardSize);
+
+                // 初回クリック位置とその周囲3x3には配置しない
+                if (Math.abs(r - firstR) <= 1 && Math.abs(c - firstC) <= 1) continue;
+
+                if (!board[r][c].isMine) {
+                    board[r][c].isMine = true;
+                    placed++;
+                }
+            }
+
+            // 隣接地雷数の計算
+            for (let r = 0; r < boardSize; r++) {
+                for (let c = 0; c < boardSize; c++) {
+                    if (board[r][c].isMine) continue;
+                    let count = 0;
+                    for (let dr = -1; dr <= 1; dr++) {
+                        for (let dc = -1; dc <= 1; dc++) {
+                            let nr = r + dr;
+                            let nc = c + dc;
+                            if (nr >= 0 && nr < boardSize && nc >= 0 && nc < boardSize) {
+                                if (board[nr][nc].isMine) count++;
+                            }
+                        }
+                    }
+                    board[r][c].neighborMines = count;
+                }
+            }
+        }
+
+        // 描画処理
+        function render() {
+            if (!board || board.length < boardSize || cellSize <= 0) return;
+
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            for (let r = 0; r < boardSize; r++) {
+                for (let c = 0; c < boardSize; c++) {
+                    let cell = board[r][c];
+                    let x = c * cellSize;
+                    let y = r * cellSize;
+
+                    // マスの背景描画
+                    if (cell.isOpen) {
+                        ctx.fillStyle = (r + c) % 2 === 0 ? '#1e293b' : '#0f172a';
+                        ctx.fillRect(x, y, cellSize, cellSize);
+
+                        if (cell.isMine) {
+                            // 地雷
+                            ctx.fillStyle = '#ef4444';
+                            ctx.beginPath();
+                            ctx.arc(x + cellSize / 2, y + cellSize / 2, cellSize * 0.25, 0, Math.PI * 2);
+                            ctx.fill();
+                        } else if (cell.neighborMines > 0) {
+                            // 数字
+                            ctx.font = `bold ${cellSize * 0.5}px sans-serif`;
+                            ctx.textAlign = 'center';
+                            ctx.textBaseline = 'middle';
+                            ctx.fillStyle = getNumberColor(cell.neighborMines);
+                            ctx.fillText(cell.neighborMines.toString(), x + cellSize / 2, y + cellSize / 2);
+                        }
+                    } else {
+                        // 未オープンのマス
+                        ctx.fillStyle = (r + c) % 2 === 0 ? '#334155' : '#475569';
+                        ctx.fillRect(x, y, cellSize, cellSize);
+
+                        // 旗
+                        if (cell.isFlagged) {
+                            ctx.font = `${cellSize * 0.4}px sans-serif`;
+                            ctx.textAlign = 'center';
+                            ctx.textBaseline = 'middle';
+                            ctx.fillText('🚩', x + cellSize / 2, y + cellSize / 2);
+                        }
+                    }
+
+                    // 枠線
+                    ctx.strokeStyle = '#0f172a';
+                    ctx.lineWidth = 1;
+                    ctx.strokeRect(x, y, cellSize, cellSize);
+                }
+            }
+
+            // 地雷探知機モード中のオーバーレイハイライト
+            if (detectorActive) {
+                ctx.fillStyle = 'rgba(99, 102, 241, 0.18)';
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+            }
+
+            // 地雷探知機の十字ビーム演出描画
+            if (activeEffect) {
+                const { row, col, opacity, color } = activeEffect;
+                ctx.fillStyle = color === 'green'
+                    ? `rgba(34, 197, 94, ${opacity})`   // 0個：緑
+                    : `rgba(239, 68, 68, ${opacity})`;  // 1個以上：赤
+
+                // 横方向の帯（行）
+                ctx.fillRect(0, row * cellSize, canvas.width, cellSize);
+                // 縦方向の帯（列）
+                ctx.fillRect(col * cellSize, 0, cellSize, canvas.height);
+            }
+
+            // 勝利演出（Congratulations! Mission Complete!）
+            if (gameWon) {
+                // 背景ダークオーバーレイ
+                ctx.fillStyle = 'rgba(15, 23, 42, 0.88)';
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+                ctx.save();
+                // テキストシャドウ・グロー効果
+                ctx.shadowColor = '#10b981';
+                ctx.shadowBlur = 15;
+
+                // Congratulations!
+                ctx.font = `900 ${cellSize * 0.65}px sans-serif`;
+                ctx.fillStyle = '#34d399';
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                ctx.fillText('Congratulations!', canvas.width / 2, canvas.height / 2 - cellSize * 0.8);
+
+                // Mission Complete!
+                ctx.font = `900 ${cellSize * 0.8}px sans-serif`;
+                ctx.fillStyle = '#fbbf24';
+                ctx.shadowColor = '#f59e0b';
+                ctx.shadowBlur = 20;
+                ctx.fillText('Mission Complete!', canvas.width / 2, canvas.height / 2 + cellSize * 0.6);
+                ctx.restore();
+            }
+        }
+
+        // 数字ごとの色設定
+        function getNumberColor(num) {
+            const colors = [
+                '',
+                '#60a5fa', // 1: Blue
+                '#4ade80', // 2: Green
+                '#f87171', // 3: Red
+                '#c084fc', // 4: Purple
+                '#fbbf24', // 5: Yellow
+                '#38bdf8', // 6: Cyan
+                '#f472b6', // 7: Pink
+                '#94a3b8'  // 8: Gray
+            ];
+            return colors[num] || '#ffffff';
+        }
+
+        // マスを開く（再帰的オープン）
+        function openCell(r, c) {
+            if (r < 0 || r >= boardSize || c < 0 || c >= boardSize) return;
+            let cell = board[r][c];
+            if (cell.isOpen || cell.isFlagged) return;
+
+            cell.isOpen = true;
+
+            if (cell.isMine) {
+                // 地雷を踏んだ
+                gameOver = true;
+                revealAllMines();
+                setMessage('💣 地雷が爆発しました！ゲームオーバー');
+                return;
+            }
+
+            // 隣接地雷数が0の場合は自動展開
+            if (cell.neighborMines === 0) {
+                for (let dr = -1; dr <= 1; dr++) {
+                    for (let dc = -1; dc <= 1; dc++) {
+                        openCell(r + dr, c + dc);
+                    }
+                }
+            }
+
+            checkWin();
+        }
+
+        // 全地雷の表示
+        function revealAllMines() {
+            for (let r = 0; r < boardSize; r++) {
+                for (let c = 0; c < boardSize; c++) {
+                    if (board[r][c].isMine) {
+                        board[r][c].isOpen = true;
+                    }
+                }
+            }
+        }
+
+        // 勝利チェック
+        function checkWin() {
+            let safeCellsLeft = 0;
+            for (let r = 0; r < boardSize; r++) {
+                for (let c = 0; c < boardSize; c++) {
+                    if (!board[r][c].isMine && !board[r][c].isOpen) {
+                        safeCellsLeft++;
+                    }
+                }
+            }
+
+            if (safeCellsLeft === 0) {
+                gameWon = true;
+                gameOver = true;
+                setMessage('🎉 Congratulations! Mission Complete!');
+            }
+        }
+
+        // 地雷探知機の起動処理（選択マスを中心に十字方向に地雷数をカウント）
+        function useDetector(targetRow, targetCol) {
+            // 初手未開で探知機を使用した場合は地雷を確定生成
+            if (firstClick) {
+                placeMines(targetRow, targetCol);
+                firstClick = false;
+            }
+
+            let count = 0;
+
+            // 十字ライン（同列・同行）上の地雷数を集計
+            for (let i = 0; i < boardSize; i++) {
+                // 行方向（targetRow）
+                if (board[targetRow][i].isMine) count++;
+                // 列方向（targetCol、中心マスの重複判定を防止）
+                if (i !== targetRow && board[i][targetCol].isMine) count++;
+            }
+
+            detectorRemaining--;
+            detectorActive = false;
+
+            const isSafe = count === 0;
+            const colorName = isSafe ? '緑' : '赤';
+            setMessage(`📡 【探知結果】 十字エリア内に地雷が ${count} 個検出されました (${colorName}発光)`);
+            
+            updateUI();
+
+            // 十字の光の帯の演出呼び出し
+            flashCross(targetRow, targetCol, isSafe ? 'green' : 'red');
+        }
+
+        // 探知した十字エリアをフェードアウト光帯表示
+        function flashCross(row, col, color) {
+            if (activeEffect && activeEffect.timer) clearInterval(activeEffect.timer);
+
+            let opacity = 0.85;
+            const timer = setInterval(() => {
+                activeEffect = { row, col, opacity, color, timer };
+                render();
+                opacity -= 0.05;
+
+                if (opacity <= 0) {
+                    clearInterval(timer);
+                    activeEffect = null;
+                    render();
+                }
+            }, 40);
+        }
+
+        // UI状態更新
+        function updateUI() {
+            if (!board || board.length === 0) return;
+
+            // 残り地雷数（旗の数を差し引く）
+            let flagCount = 0;
+            for (let r = 0; r < boardSize; r++) {
+                for (let c = 0; c < boardSize; c++) {
+                    if (board[r][c].isFlagged) flagCount++;
+                }
+            }
+            mineCountEl.textContent = minesCount - flagCount;
+
+            // ゲーム状態
+            if (gameWon) {
+                gameStatusEl.textContent = '勝利！';
+                gameStatusEl.className = 'text-sm font-bold text-emerald-400 leading-6';
+            } else if (gameOver) {
+                gameStatusEl.textContent = '失敗';
+                gameStatusEl.className = 'text-sm font-bold text-red-400 leading-6';
+            } else {
+                gameStatusEl.textContent = 'プレイ中';
+                gameStatusEl.className = 'text-sm font-bold text-amber-400 leading-6';
+            }
+
+            // モード切り替え状態
+            if (detectorActive) {
+                clickModeEl.textContent = '探知選択';
+                clickModeEl.className = 'text-xs font-bold text-indigo-400 leading-6';
+            } else if (flagMode) {
+                clickModeEl.textContent = '旗を立てる';
+                clickModeEl.className = 'text-xs font-bold text-red-400 leading-6';
+            } else {
+                clickModeEl.textContent = '開く';
+                clickModeEl.className = 'text-xs font-bold text-cyan-400 leading-6';
+            }
+
+            // ボタンの状態
+            btnMode.innerHTML = flagMode ? '<span>🚩 旗モード: ON</span>' : '<span>🚩 旗モード: OFF</span>';
+            btnMode.className = flagMode 
+                ? 'flex-1 py-2 px-3 bg-red-600 hover:bg-red-500 rounded-lg font-semibold text-xs flex items-center justify-center gap-1 transition active:scale-95 shadow-lg shadow-red-900/40'
+                : 'flex-1 py-2 px-3 bg-slate-700 hover:bg-slate-600 rounded-lg font-semibold text-xs flex items-center justify-center gap-1 transition active:scale-95';
+
+            btnDetector.disabled = detectorRemaining <= 0 || gameOver;
+            if (detectorRemaining <= 0) {
+                btnDetector.innerHTML = '<span>📡 地雷探知機 (使用済)</span>';
+            } else {
+                btnDetector.innerHTML = detectorActive 
+                    ? '<span>📡 十字位置を選択中...</span>' 
+                    : `<span>📡 地雷探知機 (残り${detectorRemaining}回)</span>`;
+            }
+        }
+
+        function setMessage(msg) {
+            messageBox.textContent = msg;
+        }
+
+        // クリック／タップ イベント処理
+        function handleBoardClick(x, y, isRightClick = false) {
+            if (gameOver) return;
+
+            const col = Math.floor(x / cellSize);
+            const row = Math.floor(y / cellSize);
+
+            if (row < 0 || row >= boardSize || col < 0 || col >= boardSize) return;
+
+            // 地雷探知機モードの場合
+            if (detectorActive) {
+                useDetector(row, col);
+                return;
+            }
+
+            // 初回クリック時の処理（地雷の生成）
+            if (firstClick) {
+                placeMines(row, col);
+                firstClick = false;
+            }
+
+            const cell = board[row][col];
+
+            // 旗モードまたは右クリック時
+            if (isRightClick || flagMode) {
+                if (!cell.isOpen) {
+                    cell.isFlagged = !cell.isFlagged;
+                    updateUI();
+                    render();
+                }
+                return;
+            }
+
+            // 通常の開く処理
+            if (!cell.isFlagged && !cell.isOpen) {
+                openCell(row, col);
+                updateUI();
+                render();
+            }
+        }
+
+        // イベントリスナー設定
+        canvas.addEventListener('click', (e) => {
+            if (isLongTouch) return; // 長押し後はタップ処理をスキップ
+            const rect = canvas.getBoundingClientRect();
+            const x = e.clientX - rect.left;
+            const y = e.clientY - rect.top;
+            handleBoardClick(x, y, false);
+        });
+
+        // 右クリックで旗を立てる
+        canvas.addEventListener('contextmenu', (e) => {
+            e.preventDefault();
+            const rect = canvas.getBoundingClientRect();
+            const x = e.clientX - rect.left;
+            const y = e.clientY - rect.top;
+            handleBoardClick(x, y, true);
+        });
+
+        // モバイル向け長押し判定（タッチ対応）
+        canvas.addEventListener('touchstart', (e) => {
+            isLongTouch = false;
+            if (e.touches.length > 0) {
+                const touch = e.touches[0];
+                const rect = canvas.getBoundingClientRect();
+                const x = touch.clientX - rect.left;
+                const y = touch.clientY - rect.top;
+
+                touchTimer = setTimeout(() => {
+                    isLongTouch = true;
+                    handleBoardClick(x, y, true); // 旗操作として処理
+                }, 400); // 400msで長押しと判定
+            }
+        }, { passive: true });
+
+        canvas.addEventListener('touchend', () => {
+            clearTimeout(touchTimer);
+        });
+
+        canvas.addEventListener('touchmove', () => {
+            clearTimeout(touchTimer);
+        }, { passive: true });
+
+        // 各ボタンのリスナー
+        btnMode.addEventListener('click', () => {
+            if (detectorActive) detectorActive = false;
+            flagMode = !flagMode;
+            updateUI();
+            render();
+        });
+
+        btnDetector.addEventListener('click', () => {
+            if (detectorRemaining <= 0 || gameOver) return;
+            detectorActive = !detectorActive;
+            if (detectorActive) {
+                setMessage('📡 チェックしたいマス（十字中心）をタップしてください。');
+            } else {
+                setMessage('マスをタップして開きます (長押しで旗)');
+            }
+            updateUI();
+            render();
+        });
+
+        btnRestart.addEventListener('click', () => {
+            initGame();
+            setMessage('マスをタップして開きます (長押しで旗)');
+        });
+
+        // 難易度ボタンのクリックイベント
+        diffBtns.forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                const diff = e.currentTarget.dataset.diff;
+                setDifficulty(diff);
+            });
+        });
+
+        // 各ボタンのリスナー
+        btnMode.addEventListener('click', () => {
+            if (detectorActive) detectorActive = false;
+            flagMode = !flagMode;
+            updateUI();
+            render();
+        });
+
+        btnDetector.addEventListener('click', () => {
+            if (detectorUsed || gameOver) return;
+            detectorActive = !detectorActive;
+            if (detectorActive) {
+                setMessage('📡 チェックしたいマス（十字中心）をタップしてください。');
+            } else {
+                setMessage('マスをタップして開きます (長押しで旗)');
+            }
+            updateUI();
+            render();
+        });
+
+        btnRestart.addEventListener('click', () => {
+            initGame();
+            setMessage('マスをタップして開きます (長押しで旗)');
+        });
+
+        // 難易度ボタンのクリックイベント登録
+        diffBtns.forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                const diff = e.currentTarget.dataset.diff;
+                setDifficulty(diff);
+            });
+        });
+
+        // リサイズ監視（ResizeObserverで確実に初期化）
+        if (window.ResizeObserver) {
+            const observer = new ResizeObserver(() => {
+                resizeCanvas();
+            });
+            observer.observe(document.getElementById('canvas-container'));
+        }
+        window.addEventListener('resize', resizeCanvas);
+
+        // DOMロード完了時の自動開始
+        window.addEventListener('load', () => {
+            initGame();
+        });
+
+        // 即時起動フォールバック
+        initGame();
+    </script>
+</body>
+</html>
