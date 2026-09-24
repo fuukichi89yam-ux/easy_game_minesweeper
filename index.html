@@ -617,39 +617,6 @@
             });
         });
 
-        // 各ボタンのリスナー
-        btnMode.addEventListener('click', () => {
-            if (detectorActive) detectorActive = false;
-            flagMode = !flagMode;
-            updateUI();
-            render();
-        });
-
-        btnDetector.addEventListener('click', () => {
-            if (detectorUsed || gameOver) return;
-            detectorActive = !detectorActive;
-            if (detectorActive) {
-                setMessage('📡 チェックしたいマス（十字中心）をタップしてください。');
-            } else {
-                setMessage('マスをタップして開きます (長押しで旗)');
-            }
-            updateUI();
-            render();
-        });
-
-        btnRestart.addEventListener('click', () => {
-            initGame();
-            setMessage('マスをタップして開きます (長押しで旗)');
-        });
-
-        // 難易度ボタンのクリックイベント登録
-        diffBtns.forEach(btn => {
-            btn.addEventListener('click', (e) => {
-                const diff = e.currentTarget.dataset.diff;
-                setDifficulty(diff);
-            });
-        });
-
         // リサイズ監視（ResizeObserverで確実に初期化）
         if (window.ResizeObserver) {
             const observer = new ResizeObserver(() => {
